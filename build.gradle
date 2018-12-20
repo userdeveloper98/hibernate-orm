@@ -12,8 +12,8 @@ buildscript {
 		jcenter()
 		mavenCentral()
 		maven {
-			name "jboss-snapshots"
-			url "http://snapshots.jboss.org/maven2/"
+			name 'jboss-snapshots'
+			url 'http://repository.jboss.org/nexus/content/repositories/snapshots/'
 		}
 	}
 	dependencies {
@@ -29,8 +29,8 @@ buildscript {
 }
 
 plugins {
-	id 'com.gradle.build-scan' version '1.9'
-	id 'me.champeau.buildscan-recipes' version '0.1.7'
+	id 'com.gradle.build-scan' version '1.16'
+	id 'me.champeau.buildscan-recipes' version '0.2.3'
 }
 
 allprojects {
@@ -38,7 +38,14 @@ allprojects {
 		mavenCentral()
 		maven {
 			name "jboss-snapshots"
-			url "http://snapshots.jboss.org/maven2/"
+			url "http://repository.jboss.org/nexus/content/repositories/snapshots/"
+		}
+		//Allow loading additional dependencies from a local path;
+		//useful to load JDBC drivers which can not be distributed in public.
+		if (System.env['ADDITIONAL_REPO'] != null) {
+			flatDir {
+				dirs "${System.env.ADDITIONAL_REPO}"
+			}
 		}
 	}
 	apply plugin: 'idea'
@@ -87,7 +94,7 @@ task ciBuild {
 
 
 wrapper {
-	gradleVersion = '4.8.1'
+	gradleVersion = '4.10.2'
 	distributionType = Wrapper.DistributionType.ALL
 }
 
@@ -95,16 +102,11 @@ wrapper {
 buildScan {
 	licenseAgreementUrl = 'https://gradle.com/terms-of-service'
 	licenseAgree = 'yes'
-
-	recipe 'git-commit', baseUrl: 'https://github.com/hibernate/hibernate-orm/tree'
 }
 
-
-
-
-
-
-
+buildScanRecipes {
+	recipe 'git-commit', baseUrl: 'https://github.com/hibernate/hibernate-orm/tree'
+}
 
 //idea {
 //    project {

@@ -6,9 +6,12 @@
  */
 package org.hibernate.cfg.annotations;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
@@ -29,6 +32,7 @@ import javax.persistence.OneToMany;
 
 import org.hibernate.AnnotationException;
 import org.hibernate.FetchMode;
+import org.hibernate.HibernateException;
 import org.hibernate.MappingException;
 import org.hibernate.annotations.BatchSize;
 import org.hibernate.annotations.Cache;
@@ -70,6 +74,7 @@ import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.cfg.AccessType;
 import org.hibernate.cfg.AnnotatedClassType;
 import org.hibernate.cfg.AnnotationBinder;
+import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.cfg.BinderHelper;
 import org.hibernate.cfg.CollectionPropertyHolder;
 import org.hibernate.cfg.CollectionSecondPass;
@@ -84,9 +89,12 @@ import org.hibernate.cfg.PropertyInferredData;
 import org.hibernate.cfg.PropertyPreloadedData;
 import org.hibernate.cfg.SecondPass;
 import org.hibernate.criterion.Junction;
+import org.hibernate.engine.config.spi.ConfigurationService;
 import org.hibernate.engine.spi.ExecuteUpdateResultCheckStyle;
 import org.hibernate.internal.CoreMessageLogger;
+import org.hibernate.internal.util.ReflectHelper;
 import org.hibernate.internal.util.StringHelper;
+import org.hibernate.internal.util.config.ConfigurationHelper;
 import org.hibernate.mapping.Any;
 import org.hibernate.mapping.Backref;
 import org.hibernate.mapping.Collection;
@@ -115,6 +123,14 @@ import static org.hibernate.cfg.BinderHelper.toAliasTableMap;
 @SuppressWarnings({"unchecked", "serial", "WeakerAccess", "deprecation"})
 public abstract class CollectionBinder {
 	private static final CoreMessageLogger LOG = Logger.getMessageLogger(CoreMessageLogger.class, CollectionBinder.class.getName());
+
+	private static final List<Class<?>> INFERRED_CLASS_PRIORITY = Collections.unmodifiableList( Arrays.asList(
+			java.util.List.class,
+			java.util.SortedSet.class,
+			java.util.Set.class,
+			java.util.SortedMap.class,
+			java.util.Map.class,
+			java.util.Collection.class) );
 
 	private MetadataBuildingContext buildingContext;
 
@@ -253,6 +269,7 @@ public abstract class CollectionBinder {
 			boolean isHibernateExtensionMapping,
 			MetadataBuildingContext buildingContext) {
 		final CollectionBinder result;
+
 		if ( property.isArray() ) {
 			if ( property.getElementClass().isPrimitive() ) {
 				result = new PrimitiveArrayBinder();
@@ -263,62 +280,39 @@ public abstract class CollectionBinder {
 		}
 		else if ( property.isCollection() ) {
 			//TODO consider using an XClass
-			Class returnedClass = property.getCollectionClass();
-			if ( java.util.Set.class.equals( returnedClass ) ) {
-				if ( property.isAnnotationPresent( CollectionId.class ) ) {
-					throw new AnnotationException( "Set do not support @CollectionId: "
-							+ StringHelper.qualify( entityName, property.getName() ) );
-				}
-				result = new SetBinder( false );
+			final Class<?> returnedClass = property.getCollectionClass();
+
+			final CollectionBinder basicBinder = getBinderFromBasicCollectionType(
+					returnedClass,
+					property,
+					entityName,
+					isIndexed
+			);
+			if ( basicBinder != null ) {
+				result = basicBinder;
 			}
-			else if ( java.util.SortedSet.class.equals( returnedClass ) ) {
-				if ( property.isAnnotationPresent( CollectionId.class ) ) {
-					throw new AnnotationException( "Set do not support @CollectionId: "
-							+ StringHelper.qualify( entityName, property.getName() ) );
-				}
-				result = new SetBinder( true );
-			}
-			else if ( java.util.Map.class.equals( returnedClass ) ) {
-				if ( property.isAnnotationPresent( CollectionId.class ) ) {
-					throw new AnnotationException( "Map do not support @CollectionId: "
-							+ StringHelper.qualify( entityName, property.getName() ) );
-				}
-				result = new MapBinder( false );
-			}
-			else if ( java.util.SortedMap.class.equals( returnedClass ) ) {
-				if ( property.isAnnotationPresent( CollectionId.class ) ) {
-					throw new AnnotationException( "Map do not support @CollectionId: "
-							+ StringHelper.qualify( entityName, property.getName() ) );
-				}
-				result = new MapBinder( true );
-			}
-			else if ( java.util.Collection.class.equals( returnedClass ) ) {
-				if ( property.isAnnotationPresent( CollectionId.class ) ) {
-					result = new IdBagBinder();
+			else if ( property.isAnnotationPresent( CollectionType.class ) ) {
+				Class<?> semanticsClass = property.getAnnotation( CollectionType.class ).semantics();
+
+				if ( semanticsClass != void.class ) {
+					result = getBinderFromBasicCollectionType( semanticsClass, property, entityName, isIndexed );
 				}
 				else {
-					result = new BagBinder();
-				}
-			}
-			else if ( java.util.List.class.equals( returnedClass ) ) {
-				if ( isIndexed ) {
-					if ( property.isAnnotationPresent( CollectionId.class ) ) {
-						throw new AnnotationException(
-								"List do not support @CollectionId and @OrderColumn (or @IndexColumn) at the same time: "
-								+ StringHelper.qualify( entityName, property.getName() ) );
-					}
-					result = new ListBinder();
-				}
-				else if ( property.isAnnotationPresent( CollectionId.class ) ) {
-					result = new IdBagBinder();
-				}
-				else {
-					result = new BagBinder();
+					final Class<?> inferredClass = inferCollectionClassFromSubclass( returnedClass );
+					result = inferredClass != null ? getBinderFromBasicCollectionType(
+							inferredClass,
+							property,
+							entityName,
+							isIndexed
+					) : null;
 				}
 			}
 			else {
+				result = null;
+			}
+			if ( result == null ) {
 				throw new AnnotationException(
-						returnedClass.getName() + " collection not yet supported: "
+						returnedClass.getName() + " collection type not supported for property: "
 								+ StringHelper.qualify( entityName, property.getName() )
 				);
 			}
@@ -349,6 +343,72 @@ public abstract class CollectionBinder {
 		}
 
 		return result;
+	}
+
+	private static CollectionBinder getBinderFromBasicCollectionType(Class<?> clazz, XProperty property,
+			String entityName, boolean isIndexed) {
+		if ( java.util.Set.class.equals( clazz) ) {
+			if ( property.isAnnotationPresent( CollectionId.class) ) {
+				throw new AnnotationException("Set do not support @CollectionId: "
+						+ StringHelper.qualify( entityName, property.getName() ) );
+			}
+			return new SetBinder( false );
+		}
+		else if ( java.util.SortedSet.class.equals( clazz ) ) {
+			if ( property.isAnnotationPresent( CollectionId.class ) ) {
+				throw new AnnotationException( "Set do not support @CollectionId: "
+						+ StringHelper.qualify( entityName, property.getName() ) );
+			}
+			return new SetBinder( true );
+		}
+		else if ( java.util.Map.class.equals( clazz ) ) {
+			if ( property.isAnnotationPresent( CollectionId.class ) ) {
+				throw new AnnotationException( "Map do not support @CollectionId: "
+						+ StringHelper.qualify( entityName, property.getName() ) );
+			}
+			return new MapBinder( false );
+		}
+		else if ( java.util.SortedMap.class.equals( clazz ) ) {
+			if ( property.isAnnotationPresent( CollectionId.class ) ) {
+				throw new AnnotationException( "Map do not support @CollectionId: "
+						+ StringHelper.qualify( entityName, property.getName() ) );
+			}
+			return new MapBinder( true );
+		}
+		else if ( java.util.Collection.class.equals( clazz ) ) {
+			if ( property.isAnnotationPresent( CollectionId.class ) ) {
+				return new IdBagBinder();
+			}
+			else {
+				return new BagBinder();
+			}
+		}
+		else if ( java.util.List.class.equals( clazz ) ) {
+			if ( isIndexed ) {
+				if ( property.isAnnotationPresent( CollectionId.class ) ) {
+					throw new AnnotationException(
+							"List do not support @CollectionId and @OrderColumn (or @IndexColumn) at the same time: "
+									+ StringHelper.qualify( entityName, property.getName() ) );
+				}
+				return new ListBinder();
+			}
+			else if ( property.isAnnotationPresent( CollectionId.class ) ) {
+				return new IdBagBinder();
+			}
+			else {
+				return new BagBinder();
+			}
+		}
+		return null;
+	}
+
+	private static Class<?> inferCollectionClassFromSubclass(Class<?> clazz) {
+		for ( Class<?> priorityClass : INFERRED_CLASS_PRIORITY ) {
+			if ( priorityClass.isAssignableFrom( clazz ) ) {
+				return priorityClass;
+			}
+		}
+		return null;
 	}
 
 	public void setMappedBy(String mappedBy) {
@@ -953,42 +1013,58 @@ public abstract class CollectionBinder {
 			}
 		}
 
-		StringBuilder whereBuffer = new StringBuilder();
-		if ( property.getElementClass() != null ) {
+		final boolean useEntityWhereClauseForCollections = ConfigurationHelper.getBoolean(
+				AvailableSettings.USE_ENTITY_WHERE_CLAUSE_FOR_COLLECTIONS,
+				buildingContext
+						.getBuildingOptions()
+						.getServiceRegistry()
+						.getService( ConfigurationService.class )
+						.getSettings(),
+				true
+		);
+
+		// There are 2 possible sources of "where" clauses that apply to the associated entity table:
+		// 1) from the associated entity mapping; i.e., @Entity @Where(clause="...")
+		//    (ignored if useEntityWhereClauseForCollections == false)
+		// 2) from the collection mapping;
+		//    for one-to-many, e.g., @OneToMany @JoinColumn @Where(clause="...") public Set<Rating> getRatings();
+		//    for many-to-many e.g., @ManyToMany @Where(clause="...") public Set<Rating> getRatings();
+		String whereOnClassClause = null;
+		if ( useEntityWhereClauseForCollections && property.getElementClass() != null ) {
 			Where whereOnClass = property.getElementClass().getAnnotation( Where.class );
 			if ( whereOnClass != null ) {
-				String clause = whereOnClass.clause();
-				if ( StringHelper.isNotEmpty( clause ) ) {
-					whereBuffer.append( clause );
-				}
+				whereOnClassClause = whereOnClass.clause();
 			}
 		}
 		Where whereOnCollection = property.getAnnotation( Where.class );
+		String whereOnCollectionClause = null;
 		if ( whereOnCollection != null ) {
-			String clause = whereOnCollection.clause();
-			if ( StringHelper.isNotEmpty( clause ) ) {
-				if ( whereBuffer.length() > 0 ) {
-					whereBuffer.append( ' ' );
-					whereBuffer.append( Junction.Nature.AND.getOperator() );
-					whereBuffer.append( ' ' );
-				}
-				whereBuffer.append( clause );
-			}
+			whereOnCollectionClause = whereOnCollection.clause();
 		}
-		if ( whereBuffer.length() > 0 ) {
-			String whereClause = whereBuffer.toString();
-			if ( hasAssociationTable ) {
-				collection.setManyToManyWhere( whereClause );
-			}
-			else {
-				collection.setWhere( whereClause );
-			}
+		final String whereClause = StringHelper.getNonEmptyOrConjunctionIfBothNonEmpty(
+				whereOnClassClause,
+				whereOnCollectionClause
+		);
+		if ( hasAssociationTable ) {
+			// A many-to-many association has an association (join) table
+			// Collection#setManytoManyWhere is used to set the "where" clause that applies to
+			// to the many-to-many associated entity table (not the join table).
+			collection.setManyToManyWhere( whereClause );
+		}
+		else {
+			// A one-to-many association does not have an association (join) table.
+			// Collection#setWhere is used to set the "where" clause that applies to the collection table
+			// (which is the associated entity table for a one-to-many association).
+			collection.setWhere( whereClause );
 		}
 
 		WhereJoinTable whereJoinTable = property.getAnnotation( WhereJoinTable.class );
 		String whereJoinTableClause = whereJoinTable == null ? null : whereJoinTable.clause();
 		if ( StringHelper.isNotEmpty( whereJoinTableClause ) ) {
 			if ( hasAssociationTable ) {
+				// This is a many-to-many association.
+				// Collection#setWhere is used to set the "where" clause that applies to the collection table
+				// (which is the join table for a many-to-many association).
 				collection.setWhere( whereJoinTableClause );
 			}
 			else {
@@ -1418,6 +1494,7 @@ public abstract class CollectionBinder {
 					anyAnn.metaColumn(),
 					inferredData,
 					cascadeDeleteEnabled,
+					anyAnn.fetch() == FetchType.LAZY,
 					Nullability.NO_CONSTRAINT,
 					propertyHolder,
 					new EntityBinder(),

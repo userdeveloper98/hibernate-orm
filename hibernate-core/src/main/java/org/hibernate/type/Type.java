@@ -222,7 +222,7 @@ public interface Type extends Serializable {
 	 * @throws HibernateException A problem occurred calculating the hash code
 	 */
 	int getHashCode(Object x, SessionFactoryImplementor factory) throws HibernateException;
-	
+
 	/**
 	 * Perform a {@link java.util.Comparator} style comparison between values
 	 *
@@ -235,7 +235,7 @@ public interface Type extends Serializable {
 
 	/**
 	 * Should the parent be considered dirty, given both the old and current value?
-	 * 
+	 *
 	 * @param old the old value
 	 * @param current the current value
 	 * @param session The session from which the request originated.
@@ -427,7 +427,7 @@ public interface Type extends Serializable {
 	 * @throws HibernateException An error from Hibernate
 	 */
 	Object assemble(Serializable cached, SharedSessionContractImplementor session, Object owner) throws HibernateException;
-	
+
 	/**
 	 * Called before assembling a query result set from the query cache, to allow batch fetching
 	 * of entities missing from the second-level cache.
@@ -444,7 +444,7 @@ public interface Type extends Serializable {
 	 *     <li>in the case of an entity or collection type, the key</li>
 	 *     <li>otherwise, the value itself</li>
 	 * </ul>
-	 * 
+	 *
 	 * @param rs The JDBC result set
 	 * @param names the column names making up this type value (use to read from result set)
 	 * @param session The originating session
@@ -501,7 +501,7 @@ public interface Type extends Serializable {
 	 */
 	Object semiResolve(Object value, SharedSessionContractImplementor session, Object owner)
 	throws HibernateException;
-	
+
 	/**
 	 * As part of 2-phase loading, when we perform resolving what is the resolved type for this type?  Generally
 	 * speaking the type and its semi-resolved type will be the same.  The main deviation from this is in the
@@ -536,7 +536,7 @@ public interface Type extends Serializable {
 			SharedSessionContractImplementor session,
 			Object owner,
 			Map copyCache) throws HibernateException;
-	
+
 	/**
 	 * During merge, replace the existing (target) value in the entity we are merging to
 	 * with a new (original) value from the detached entity we are merging. For immutable
@@ -562,16 +562,16 @@ public interface Type extends Serializable {
 			Object owner,
 			Map copyCache,
 			ForeignKeyDirection foreignKeyDirection) throws HibernateException;
-	
+
 	/**
 	 * Given an instance of the type, return an array of boolean, indicating
 	 * which mapped columns would be null.
-	 * 
+	 *
 	 * @param value an instance of the type
 	 * @param mapping The mapping abstraction
 	 *
 	 * @return array indicating column nullness for a value instance
 	 */
 	boolean[] toColumnNullness(Object value, Mapping mapping);
-	
+
 }

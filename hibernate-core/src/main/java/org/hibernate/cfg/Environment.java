@@ -8,7 +8,6 @@ package org.hibernate.cfg;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
@@ -160,28 +159,15 @@ public final class Environment implements AvailableSettings {
 
 	private static final Properties GLOBAL_PROPERTIES;
 
-	private static final Map OBSOLETE_PROPERTIES = new HashMap();
-	private static final Map RENAMED_PROPERTIES = new HashMap();
-
 	/**
-	 * Issues warnings to the user when any obsolete or renamed property names are used.
+	 * No longer effective.
 	 *
 	 * @param configurationValues The specified properties.
+	 * @deprecated without replacement. Such verification is best done ad hoc, case by case.
 	 */
+	@Deprecated
 	public static void verifyProperties(Map<?,?> configurationValues) {
-		final Map propertiesToAdd = new HashMap();
-		for ( Map.Entry entry : configurationValues.entrySet() ) {
-			final Object replacementKey = OBSOLETE_PROPERTIES.get( entry.getKey() );
-			if ( replacementKey != null ) {
-				LOG.unsupportedProperty( entry.getKey(), replacementKey );
-			}
-			final Object renamedKey = RENAMED_PROPERTIES.get( entry.getKey() );
-			if ( renamedKey != null ) {
-				LOG.renamedProperty( entry.getKey(), renamedKey );
-				propertiesToAdd.put( renamedKey, entry.getValue() );
-			}
-		}
-		configurationValues.putAll( propertiesToAdd );
+		//Obsolete and Renamed properties are no longer handled here
 	}
 
 	static {
@@ -224,8 +210,6 @@ public final class Environment implements AvailableSettings {
 		catch (SecurityException se) {
 			LOG.unableToCopySystemProperties();
 		}
-
-		verifyProperties(GLOBAL_PROPERTIES);
 
 		ENABLE_BINARY_STREAMS = ConfigurationHelper.getBoolean(USE_STREAMS_FOR_BINARY, GLOBAL_PROPERTIES);
 		if ( ENABLE_BINARY_STREAMS ) {
@@ -345,6 +329,7 @@ public final class Environment implements AvailableSettings {
 
 	public static final String BYTECODE_PROVIDER_NAME_JAVASSIST = "javassist";
 	public static final String BYTECODE_PROVIDER_NAME_BYTEBUDDY = "bytebuddy";
+	public static final String BYTECODE_PROVIDER_NAME_NONE = "none";
 	public static final String BYTECODE_PROVIDER_NAME_DEFAULT = BYTECODE_PROVIDER_NAME_BYTEBUDDY;
 
 	public static BytecodeProvider buildBytecodeProvider(Properties properties) {
@@ -353,6 +338,9 @@ public final class Environment implements AvailableSettings {
 	}
 
 	private static BytecodeProvider buildBytecodeProvider(String providerName) {
+		if ( BYTECODE_PROVIDER_NAME_NONE.equals( providerName ) ) {
+			return new org.hibernate.bytecode.internal.none.BytecodeProviderImpl();
+		}
 		if ( BYTECODE_PROVIDER_NAME_BYTEBUDDY.equals( providerName ) ) {
 			return new org.hibernate.bytecode.internal.bytebuddy.BytecodeProviderImpl();
 		}

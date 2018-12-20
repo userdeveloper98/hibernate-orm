@@ -6,21 +6,24 @@
  */
 package org.hibernate.bytecode.enhance.internal.bytebuddy;
 
+import static net.bytebuddy.matcher.ElementMatchers.nameStartsWith;
+import static net.bytebuddy.matcher.ElementMatchers.not;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+
 import javax.persistence.Embedded;
 
-import net.bytebuddy.description.field.FieldList;
-import net.bytebuddy.description.method.MethodList;
+import org.hibernate.bytecode.enhance.internal.bytebuddy.EnhancerImpl.AnnotatedFieldDescription;
 import org.hibernate.bytecode.enhance.spi.EnhancerConstants;
 import org.hibernate.engine.spi.CompositeOwner;
 import org.hibernate.internal.CoreLogging;
 import org.hibernate.internal.CoreMessageLogger;
 
-import net.bytebuddy.ClassFileVersion;
 import net.bytebuddy.asm.Advice;
 import net.bytebuddy.asm.AsmVisitorWrapper;
 import net.bytebuddy.description.field.FieldDescription;
@@ -36,14 +39,14 @@ import net.bytebuddy.implementation.bytecode.ByteCodeAppender;
 import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
 import net.bytebuddy.jar.asm.Type;
+import net.bytebuddy.matcher.ElementMatcher.Junction;
 import net.bytebuddy.pool.TypePool;
 
-import static net.bytebuddy.matcher.ElementMatchers.nameStartsWith;
-import static net.bytebuddy.matcher.ElementMatchers.not;
-
-class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisitorWrapper {
+final class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMethods.MethodVisitorWrapper {
 
 	private static final CoreMessageLogger log = CoreLogging.messageLogger( PersistentAttributeTransformer.class );
+
+	private static final Junction<MethodDescription> NOT_HIBERNATE_GENERATED = not( nameStartsWith( "$$_hibernate_" ) );
 
 	private final TypeDescription managedCtClass;
 
@@ -51,13 +54,13 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 
 	private final TypePool classPool;
 
-	private final FieldDescription[] enhancedFields;
+	private final AnnotatedFieldDescription[] enhancedFields;
 
 	private PersistentAttributeTransformer(
 			TypeDescription managedCtClass,
 			ByteBuddyEnhancementContext enhancementContext,
 			TypePool classPool,
-			FieldDescription[] enhancedFields) {
+			AnnotatedFieldDescription[] enhancedFields) {
 		this.managedCtClass = managedCtClass;
 		this.enhancementContext = enhancementContext;
 		this.classPool = classPool;
@@ -68,14 +71,15 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 			TypeDescription managedCtClass,
 			ByteBuddyEnhancementContext enhancementContext,
 			TypePool classPool) {
-		List<FieldDescription> persistentFieldList = new ArrayList<FieldDescription>();
+		List<AnnotatedFieldDescription> persistentFieldList = new ArrayList<>();
 		for ( FieldDescription ctField : managedCtClass.getDeclaredFields() ) {
 			// skip static fields and skip fields added by enhancement and  outer reference in inner classes
 			if ( ctField.getName().startsWith( "$$_hibernate_" ) || "this$0".equals( ctField.getName() ) ) {
 				continue;
 			}
-			if ( !ctField.isStatic() && enhancementContext.isPersistentField( ctField ) ) {
-				persistentFieldList.add( ctField );
+			AnnotatedFieldDescription annotatedField = new AnnotatedFieldDescription( enhancementContext, ctField );
+			if ( !ctField.isStatic() && enhancementContext.isPersistentField( annotatedField ) ) {
+				persistentFieldList.add( annotatedField );
 			}
 		}
 		// HHH-10646 Add fields inherited from @MappedSuperclass
@@ -84,12 +88,12 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 			persistentFieldList.addAll( collectInheritPersistentFields( managedCtClass, enhancementContext ) );
 		}
 
-		FieldDescription[] orderedFields = enhancementContext.order( persistentFieldList.toArray( new FieldDescription[0] ) );
+		AnnotatedFieldDescription[] orderedFields = enhancementContext.order( persistentFieldList.toArray( new AnnotatedFieldDescription[0] ) );
 		log.debugf( "Persistent fields for entity %s: %s", managedCtClass.getName(), Arrays.toString( orderedFields ) );
 		return new PersistentAttributeTransformer( managedCtClass, enhancementContext, classPool, orderedFields );
 	}
 
-	private static Collection<FieldDescription> collectInheritPersistentFields(
+	private static Collection<AnnotatedFieldDescription> collectInheritPersistentFields(
 			TypeDefinition managedCtClass,
 			ByteBuddyEnhancementContext enhancementContext) {
 		if ( managedCtClass == null || managedCtClass.represents( Object.class ) ) {
@@ -100,15 +104,18 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 		if ( !enhancementContext.isMappedSuperclassClass( managedCtSuperclass.asErasure() ) ) {
 			return collectInheritPersistentFields( managedCtSuperclass, enhancementContext );
 		}
+
 		log.debugf( "Found @MappedSuperclass %s to collectPersistenceFields", managedCtSuperclass );
-		List<FieldDescription> persistentFieldList = new ArrayList<FieldDescription>();
+
+		List<AnnotatedFieldDescription> persistentFieldList = new ArrayList<>();
 
 		for ( FieldDescription ctField : managedCtSuperclass.getDeclaredFields() ) {
 			if ( ctField.getName().startsWith( "$$_hibernate_" ) || "this$0".equals( ctField.getName() ) ) {
 				continue;
 			}
-			if ( !ctField.isStatic() && enhancementContext.isPersistentField( ctField ) ) {
-				persistentFieldList.add( ctField );
+			AnnotatedFieldDescription annotatedField = new AnnotatedFieldDescription( enhancementContext, ctField );
+			if ( !ctField.isStatic() && enhancementContext.isPersistentField( annotatedField ) ) {
+				persistentFieldList.add( annotatedField );
 			}
 		}
 		persistentFieldList.addAll( collectInheritPersistentFields( managedCtSuperclass, enhancementContext ) );
@@ -155,7 +162,7 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 	}
 
 	private boolean isEnhanced(String owner, String name, String desc) {
-		for ( FieldDescription enhancedField : enhancedFields ) {
+		for ( AnnotatedFieldDescription enhancedField : enhancedFields ) {
 			if ( enhancedField.getName().equals( name )
 					&& enhancedField.getDescriptor().equals( desc )
 					&& enhancedField.getDeclaringType().asErasure().getInternalName().equals( owner ) ) {
@@ -168,8 +175,8 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 	DynamicType.Builder<?> applyTo(DynamicType.Builder<?> builder, boolean accessor) {
 		boolean compositeOwner = false;
 
-		builder = builder.visit( new AsmVisitorWrapper.ForDeclaredMethods().method( not( nameStartsWith( "$$_hibernate_" ) ), this ) );
-		for ( FieldDescription enhancedField : enhancedFields ) {
+		builder = builder.visit( new AsmVisitorWrapper.ForDeclaredMethods().invokable( NOT_HIBERNATE_GENERATED, this ) );
+		for ( AnnotatedFieldDescription enhancedField : enhancedFields ) {
 			builder = builder
 					.defineMethod(
 							EnhancerConstants.PERSISTENT_FIELD_READER_PREFIX + enhancedField.getName(),
@@ -193,7 +200,7 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 
 			if ( !compositeOwner
 					&& !accessor
-					&& EnhancerImpl.isAnnotationPresent( enhancedField, Embedded.class )
+					&& enhancedField.hasAnnotation( Embedded.class )
 					&& enhancementContext.isCompositeClass( enhancedField.getType().asErasure() )
 					&& enhancementContext.doDirtyCheckingInline( managedCtClass ) ) {
 				compositeOwner = true;
@@ -217,7 +224,7 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 		return builder;
 	}
 
-	private Implementation fieldReader(FieldDescription enhancedField) {
+	private Implementation fieldReader(AnnotatedFieldDescription enhancedField) {
 		if ( !enhancementContext.hasLazyLoadableAttributes( managedCtClass ) || !enhancementContext.isLazyLoadable( enhancedField ) ) {
 			if ( enhancedField.getDeclaringType().asErasure().equals( managedCtClass ) ) {
 				return FieldAccessor.ofField( enhancedField.getName() ).in( enhancedField.getDeclaringType().asErasure() );
@@ -231,7 +238,7 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 		}
 	}
 
-	private Implementation fieldWriter(FieldDescription enhancedField) {
+	private Implementation fieldWriter(AnnotatedFieldDescription enhancedField) {
 		Implementation implementation;
 		if ( !enhancementContext.hasLazyLoadableAttributes( managedCtClass ) || !enhancementContext.isLazyLoadable( enhancedField ) ) {
 			if ( enhancedField.getDeclaringType().asErasure().equals( managedCtClass ) ) {
@@ -250,16 +257,16 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 
 	DynamicType.Builder<?> applyExtended(DynamicType.Builder<?> builder) {
 		AsmVisitorWrapper.ForDeclaredMethods.MethodVisitorWrapper enhancer = new FieldAccessEnhancer( managedCtClass, enhancementContext, classPool );
-		return builder.visit( new AsmVisitorWrapper.ForDeclaredMethods().method( not( nameStartsWith( "$$_hibernate_" ) ), enhancer ) );
+		return builder.visit( new AsmVisitorWrapper.ForDeclaredMethods().invokable( NOT_HIBERNATE_GENERATED, enhancer ) );
 	}
 
 	private static class FieldMethodReader implements ByteCodeAppender {
 
 		private final TypeDescription managedCtClass;
 
-		private final FieldDescription persistentField;
+		private final AnnotatedFieldDescription persistentField;
 
-		private FieldMethodReader(TypeDescription managedCtClass, FieldDescription persistentField) {
+		private FieldMethodReader(TypeDescription managedCtClass, AnnotatedFieldDescription persistentField) {
 			this.managedCtClass = managedCtClass;
 			this.persistentField = persistentField;
 		}
@@ -287,9 +294,9 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 
 		private final TypeDescription managedCtClass;
 
-		private final FieldDescription persistentField;
+		private final AnnotatedFieldDescription persistentField;
 
-		private FieldMethodWriter(TypeDescription managedCtClass, FieldDescription persistentField) {
+		private FieldMethodWriter(TypeDescription managedCtClass, AnnotatedFieldDescription persistentField) {
 			this.managedCtClass = managedCtClass;
 			this.persistentField = persistentField;
 		}
@@ -312,5 +319,22 @@ class PersistentAttributeTransformer implements AsmVisitorWrapper.ForDeclaredMet
 			methodVisitor.visitInsn( Opcodes.RETURN );
 			return new Size( 1 + persistentField.getType().getStackSize().getSize(), instrumentedMethod.getStackSize() );
 		}
+	}
+
+	@Override
+	public boolean equals(final Object o) {
+		if ( this == o ) {
+			return true;
+		}
+		if ( o == null || PersistentAttributeTransformer.class != o.getClass() ) {
+			return false;
+		}
+		final PersistentAttributeTransformer that = (PersistentAttributeTransformer) o;
+		return Objects.equals( managedCtClass, that.managedCtClass );
+	}
+
+	@Override
+	public int hashCode() {
+		return managedCtClass.hashCode();
 	}
 }

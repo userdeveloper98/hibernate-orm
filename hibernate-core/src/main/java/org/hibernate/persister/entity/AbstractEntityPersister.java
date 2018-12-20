@@ -29,6 +29,7 @@ import org.hibernate.AssertionFailure;
 import org.hibernate.EntityMode;
 import org.hibernate.FetchMode;
 import org.hibernate.HibernateException;
+import org.hibernate.JDBCException;
 import org.hibernate.LockMode;
 import org.hibernate.LockOptions;
 import org.hibernate.MappingException;
@@ -76,9 +77,11 @@ import org.hibernate.engine.spi.PersistentAttributeInterceptable;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.engine.spi.ValueInclusion;
+import org.hibernate.id.ForeignGenerator;
 import org.hibernate.id.IdentifierGenerator;
 import org.hibernate.id.PostInsertIdentifierGenerator;
 import org.hibernate.id.PostInsertIdentityPersister;
+import org.hibernate.id.enhanced.SequenceStyleGenerator;
 import org.hibernate.id.insert.Binder;
 import org.hibernate.id.insert.InsertGeneratedIdentifierDelegate;
 import org.hibernate.internal.CoreLogging;
@@ -106,6 +109,7 @@ import org.hibernate.mapping.Table;
 import org.hibernate.metadata.ClassMetadata;
 import org.hibernate.metamodel.model.domain.NavigableRole;
 import org.hibernate.persister.collection.CollectionPersister;
+import org.hibernate.persister.collection.QueryableCollection;
 import org.hibernate.persister.spi.PersisterCreationContext;
 import org.hibernate.persister.walking.internal.EntityIdentifierDefinitionHelper;
 import org.hibernate.persister.walking.spi.AttributeDefinition;
@@ -146,7 +150,7 @@ import org.hibernate.type.VersionType;
  */
 public abstract class AbstractEntityPersister
 		implements OuterJoinLoadable, Queryable, ClassMetadata, UniqueKeyLoadable,
-				SQLLoadable, LazyPropertyInitializer, PostInsertIdentityPersister, Lockable {
+		SQLLoadable, LazyPropertyInitializer, PostInsertIdentityPersister, Lockable {
 
 	private static final CoreMessageLogger LOG = CoreLogging.messageLogger( AbstractEntityPersister.class );
 
@@ -293,6 +297,8 @@ public abstract class AbstractEntityPersister
 	protected final BasicEntityPropertyMapping propertyMapping;
 
 	private final boolean useReferenceCacheEntries;
+
+	private boolean canIdentityInsertBeDelayed;
 
 	protected void addDiscriminatorToInsert(Insert insert) {
 	}
@@ -535,7 +541,7 @@ public abstract class AbstractEntityPersister
 
 		if ( creationContext.getSessionFactory().getSessionFactoryOptions().isSecondLevelCacheEnabled() ) {
 			this.canWriteToCache = determineCanWriteToCache( persistentClass, cacheAccessStrategy );
-			this.canReadFromCache = determineCanReadFromCache( persistentClass );
+			this.canReadFromCache = determineCanReadFromCache( persistentClass, cacheAccessStrategy );
 			this.cacheAccessStrategy = cacheAccessStrategy;
 			this.isLazyPropertiesCacheable = persistentClass.getRootClass().isLazyPropertiesCacheable();
 			this.naturalIdRegionAccessStrategy = naturalIdRegionAccessStrategy;
@@ -916,7 +922,11 @@ public abstract class AbstractEntityPersister
 	}
 
 	@SuppressWarnings("unchecked")
-	private boolean determineCanReadFromCache(PersistentClass persistentClass) {
+	private boolean determineCanReadFromCache(PersistentClass persistentClass, EntityDataAccess cacheAccessStrategy) {
+		if ( cacheAccessStrategy == null ) {
+			return false;
+		}
+
 		if ( persistentClass.isCached() ) {
 			return true;
 		}
@@ -950,6 +960,11 @@ public abstract class AbstractEntityPersister
 
 	public boolean canUseReferenceCacheEntries() {
 		return useReferenceCacheEntries;
+	}
+
+	@Override
+	public boolean canIdentityInsertBeDelayed() {
+		return canIdentityInsertBeDelayed;
 	}
 
 	protected static String getTemplateFromString(String string, SessionFactoryImplementor factory) {
@@ -2285,7 +2300,7 @@ public abstract class AbstractEntityPersister
 							new String[] {idColumnNames[i]}
 					);
 				}
-//				if (hasIdentifierProperty() && !ENTITY_ID.equals( getIdentifierPropertyName() ) ) {
+//				if (hasIdentifierProperty() && !ENTITY_ID.equals( getIdentifierPropertyNames() ) ) {
 				if ( hasIdentifierProperty() ) {
 					subclassPropertyAliases.put(
 							getIdentifierPropertyName() + "." + idPropertyNames[i],
@@ -3123,8 +3138,11 @@ public abstract class AbstractEntityPersister
 		// TODO : shouldn't inserts be Expectations.NONE?
 		final Expectation expectation = Expectations.appropriateExpectation( insertResultCheckStyles[j] );
 		final int jdbcBatchSizeToUse = session.getConfiguredJdbcBatchSize();
-		final boolean useBatch = expectation.canBeBatched() && jdbcBatchSizeToUse > 1;
-		if ( useBatch && inserBatchKey == null) {
+		final boolean useBatch = expectation.canBeBatched() &&
+						jdbcBatchSizeToUse > 1 &&
+						getIdentifierGenerator().supportsJdbcBatchInserts();
+
+		if ( useBatch && inserBatchKey == null ) {
 			inserBatchKey = new BasicBatchKey(
 					getEntityName() + "#INSERT",
 					expectation
@@ -3167,9 +3185,8 @@ public abstract class AbstractEntityPersister
 									.executeUpdate( insert ), insert, -1
 					);
 				}
-
 			}
-			catch (SQLException e) {
+			catch (SQLException | JDBCException e) {
 				if ( useBatch ) {
 					session.getJdbcCoordinator().abortBatch();
 				}
@@ -4141,12 +4158,72 @@ public abstract class AbstractEntityPersister
 		return new SubstituteBracketSQLQueryParser( sql, getFactory() ).process();
 	}
 
+	private void resolveIdentityInsertDelayable() {
+		// By default they can
+		// The remainder of this method checks use cases where we shouldn't permit it.
+		canIdentityInsertBeDelayed = true;
+
+		if ( getEntityMetamodel().getIdentifierProperty().isIdentifierAssignedByInsert() ) {
+			// if the persister writes the entity to the second-level cache; we cannot delay.
+			if ( canWriteToCache ) {
+				canIdentityInsertBeDelayed = false;
+				return;
+			}
+
+			// if the persister's identifier is assigned by insert, we need to see if we must force non-delay mode.
+			for ( NonIdentifierAttribute attribute : getEntityMetamodel().getProperties() ) {
+				if ( isTypeSelfReferencing( attribute.getType() ) ) {
+					canIdentityInsertBeDelayed = false;
+				}
+			}
+		}
+	}
+
+	private boolean isTypeSelfReferencing(Type propertyType) {
+		if ( propertyType.isAssociationType() ) {
+			if ( propertyType.isEntityType() ) {
+				Class<?> entityClass = propertyType.getReturnedClass();
+				if ( getMappedClass().equals( propertyType.getReturnedClass() ) ) {
+					return true;
+				}
+			}
+			else if ( propertyType.isCollectionType() ) {
+				// Association is a collection where owner needs identifier up-front
+				final CollectionType collection = (CollectionType) propertyType;
+				final CollectionPersister collectionPersister = getFactory().getMetamodel().collectionPersister( collection.getRole() );
+				if ( collectionPersister.isInverse() ) {
+					final EntityPersister entityPersister = collectionPersister.getOwnerEntityPersister();
+					if ( collectionPersister.getOwnerEntityPersister().equals( this ) ) {
+						final QueryableCollection queryableCollection = (QueryableCollection) collectionPersister;
+						final IdentifierGenerator identifierGenerator = queryableCollection.getElementPersister().getIdentifierGenerator();
+						// todo - perhaps this can be simplified
+						if ( ( identifierGenerator instanceof ForeignGenerator ) || ( identifierGenerator instanceof SequenceStyleGenerator ) ) {
+							return true;
+						}
+					}
+				}
+			}
+		}
+		else if ( propertyType.isComponentType() ) {
+			final CompositeType componentType = (CompositeType) propertyType;
+			for ( Type componentSubType : componentType.getSubtypes() ) {
+				if ( isTypeSelfReferencing( componentSubType ) ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
 	public final void postInstantiate() throws MappingException {
 		doLateInit();
 
 		createLoaders();
 		createUniqueKeyLoaders();
 		createQueryLoader();
+
+		resolveIdentityInsertDelayable();
 
 		doPostInstantiate();
 	}
@@ -4280,8 +4357,7 @@ public abstract class AbstractEntityPersister
 	}
 
 	private boolean isAffectedByEntityGraph(SharedSessionContractImplementor session) {
-		return session.getLoadQueryInfluencers().getFetchGraph() != null || session.getLoadQueryInfluencers()
-				.getLoadGraph() != null;
+		return session.getLoadQueryInfluencers().getEffectiveEntityGraph().getGraph() != null;
 	}
 
 	private boolean isAffectedByEnabledFetchProfiles(SharedSessionContractImplementor session) {

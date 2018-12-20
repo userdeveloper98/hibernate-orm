@@ -94,7 +94,7 @@ public class StandardServiceRegistryBuilder {
 	 * @return List of standard initiators
 	 */
 	private static List<StandardServiceInitiator> standardInitiatorList() {
-		final List<StandardServiceInitiator> initiators = new ArrayList<StandardServiceInitiator>();
+		final List<StandardServiceInitiator> initiators = new ArrayList<StandardServiceInitiator>( StandardServiceInitiators.LIST.size() );
 		initiators.addAll( StandardServiceInitiators.LIST );
 		return initiators;
 	}
@@ -281,7 +281,6 @@ public class StandardServiceRegistryBuilder {
 		final Map settingsCopy = new HashMap();
 		settingsCopy.putAll( settings );
 		settingsCopy.put( org.hibernate.boot.cfgxml.spi.CfgXmlAccessService.LOADED_CONFIG_KEY, aggregatedCfgXml );
-		Environment.verifyProperties( settingsCopy );
 		ConfigurationHelper.resolvePlaceHolders( settingsCopy );
 
 		return new StandardServiceRegistryImpl(

@@ -324,7 +324,7 @@ public enum Database {
 	MYSQL {
 		@Override
 		public Class<? extends Dialect> latestDialect() {
-			return MySQL57Dialect.class;
+			return MySQL8Dialect.class;
 		}
 
 		@Override
@@ -511,7 +511,7 @@ public enum Database {
 				return latestDialectInstance( this );
 			}
 
-			if ( databaseName.startsWith( "Adaptive Server Anywhere" ) ) {
+			if ( databaseName.startsWith( "Adaptive Server Anywhere" ) || "SQL Anywhere".equals( databaseName ) ) {
 				return new SybaseAnywhereDialect();
 			}
 

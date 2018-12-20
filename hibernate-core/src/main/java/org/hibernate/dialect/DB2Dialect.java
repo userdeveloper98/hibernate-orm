@@ -33,13 +33,16 @@ import org.hibernate.exception.LockTimeoutException;
 import org.hibernate.exception.spi.SQLExceptionConversionDelegate;
 import org.hibernate.hql.spi.id.IdTableSupportStandardImpl;
 import org.hibernate.hql.spi.id.MultiTableBulkIdStrategy;
-import org.hibernate.hql.spi.id.global.GlobalTemporaryTableBulkIdStrategy;
 import org.hibernate.hql.spi.id.local.AfterUseAction;
 import org.hibernate.hql.spi.id.local.LocalTemporaryTableBulkIdStrategy;
 import org.hibernate.internal.CoreLogging;
 import org.hibernate.internal.CoreMessageLogger;
 import org.hibernate.internal.util.JdbcExceptionHelper;
+import org.hibernate.tool.schema.extract.internal.SequenceInformationExtractorDB2DatabaseImpl;
+import org.hibernate.tool.schema.extract.internal.SequenceInformationExtractorNoOpImpl;
+import org.hibernate.tool.schema.extract.spi.SequenceInformationExtractor;
 import org.hibernate.type.StandardBasicTypes;
+import org.hibernate.type.descriptor.sql.DecimalTypeDescriptor;
 import org.hibernate.type.descriptor.sql.SmallIntTypeDescriptor;
 import org.hibernate.type.descriptor.sql.SqlTypeDescriptor;
 
@@ -100,7 +103,12 @@ public class DB2Dialect extends Dialect {
 		registerColumnType( Types.TIME, "time" );
 		registerColumnType( Types.TIMESTAMP, "timestamp" );
 		registerColumnType( Types.VARBINARY, "varchar($l) for bit data" );
-		registerColumnType( Types.NUMERIC, "numeric($p,$s)" );
+		// DB2 converts numeric to decimal under the hood
+		// Note that the type returned by DB2 for a numeric column will be Types.DECIMAL. Thus, we have an issue when
+		// comparing the types during the schema validation, defining the type to decimal here as the type names will
+		// also be compared and there will be a match. See HHH-12827 for the details.
+		registerColumnType( Types.NUMERIC, "decimal($p,$s)" );
+		registerColumnType( Types.DECIMAL, "decimal($p,$s)" );
 		registerColumnType( Types.BLOB, "blob($l)" );
 		registerColumnType( Types.CLOB, "clob($l)" );
 		registerColumnType( Types.LONGVARCHAR, "long varchar" );
@@ -210,7 +218,7 @@ public class DB2Dialect extends Dialect {
 		registerKeyword( "only" );
 
 		getDefaultProperties().setProperty( Environment.STATEMENT_BATCH_SIZE, NO_BATCH );
-		
+
 		uniqueDelegate = new DB2UniqueDelegate( this );
 	}
 
@@ -261,7 +269,17 @@ public class DB2Dialect extends Dialect {
 
 	@Override
 	public String getQuerySequencesString() {
-		return "select seqname from sysibm.syssequences";
+		return "select * from syscat.sequences";
+	}
+
+	@Override
+	public SequenceInformationExtractor getSequenceInformationExtractor() {
+		if ( getQuerySequencesString() == null ) {
+			return SequenceInformationExtractorNoOpImpl.INSTANCE;
+		}
+		else {
+			return SequenceInformationExtractorDB2DatabaseImpl.INSTANCE;
+		}
 	}
 
 	@Override
@@ -365,7 +383,7 @@ public class DB2Dialect extends Dialect {
 	@Override
 	public ResultSet getResultSet(CallableStatement ps) throws SQLException {
 		boolean isResultSet = ps.execute();
-		// This assumes you will want to ignore any update counts 
+		// This assumes you will want to ignore any update counts
 		while ( !isResultSet && ps.getUpdateCount() != -1 ) {
 			isResultSet = ps.getMoreResults();
 		}
@@ -478,7 +496,14 @@ public class DB2Dialect extends Dialect {
 
 	@Override
 	protected SqlTypeDescriptor getSqlTypeDescriptorOverride(int sqlCode) {
-		return sqlCode == Types.BOOLEAN ? SmallIntTypeDescriptor.INSTANCE : super.getSqlTypeDescriptorOverride( sqlCode );
+		if ( sqlCode == Types.BOOLEAN ) {
+			return SmallIntTypeDescriptor.INSTANCE;
+		}
+		else if ( sqlCode == Types.NUMERIC ) {
+			return DecimalTypeDescriptor.INSTANCE;
+		}
+
+		return super.getSqlTypeDescriptorOverride( sqlCode );
 	}
 
 	@Override
@@ -496,12 +521,12 @@ public class DB2Dialect extends Dialect {
 			}
 		};
 	}
-	
+
 	@Override
 	public UniqueDelegate getUniqueDelegate() {
 		return uniqueDelegate;
 	}
-	
+
 	@Override
 	public String getNotExpression( String expression ) {
 		return "not (" + expression + ")";

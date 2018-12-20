@@ -6,8 +6,6 @@
  */
 package org.hibernate.dialect;
 
-import java.util.List;
-
 import org.hibernate.dialect.pagination.LimitHandler;
 import org.hibernate.dialect.pagination.SQLServer2012LimitHandler;
 
@@ -50,7 +48,8 @@ public class SQLServer2012Dialect extends SQLServer2008Dialect {
 
 	@Override
 	public String getQuerySequencesString() {
-		return "select name from sys.sequences";
+		// The upper-case name should work on both case-sensitive and case-insensitive collations.
+		return "select * from INFORMATION_SCHEMA.SEQUENCES";
 	}
 
 	@Override

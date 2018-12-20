@@ -50,7 +50,6 @@ import org.hibernate.TypeHelper;
 import org.hibernate.boot.cfgxml.spi.CfgXmlAccessService;
 import org.hibernate.boot.cfgxml.spi.LoadedConfig;
 import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
-import org.hibernate.boot.spi.BootstrapContext;
 import org.hibernate.boot.spi.MetadataImplementor;
 import org.hibernate.boot.spi.SessionFactoryOptions;
 import org.hibernate.cache.spi.CacheImplementor;
@@ -86,6 +85,7 @@ import org.hibernate.engine.transaction.jta.platform.spi.JtaPlatform;
 import org.hibernate.event.service.spi.EventListenerGroup;
 import org.hibernate.event.service.spi.EventListenerRegistry;
 import org.hibernate.event.spi.EventType;
+import org.hibernate.graph.spi.RootGraphImplementor;
 import org.hibernate.id.IdentifierGenerator;
 import org.hibernate.id.factory.IdentifierGeneratorFactory;
 import org.hibernate.integrator.spi.Integrator;
@@ -157,7 +157,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 	private final String name;
 	private final String uuid;
 
-	private transient boolean isClosed;
+	private transient volatile boolean isClosed;
 
 	private final transient SessionFactoryObserverChain observer = new SessionFactoryObserverChain();
 
@@ -166,7 +166,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 	private final transient Map<String,Object> properties;
 
 	private final transient SessionFactoryServiceRegistry serviceRegistry;
-	private transient JdbcServices jdbcServices;
+	private final transient JdbcServices jdbcServices;
 
 	private final transient SQLFunctionRegistry sqlFunctionRegistry;
 
@@ -181,7 +181,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 
 	private final transient CurrentSessionContext currentSessionContext;
 
-	private DelayedDropAction delayedDropAction;
+	private volatile DelayedDropAction delayedDropAction;
 
 	// todo : move to MetamodelImpl
 	private final transient Map<String,IdentifierGenerator> identifierGenerators;
@@ -191,7 +191,6 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 	private final transient TypeHelper typeHelper;
 
 	public SessionFactoryImpl(
-			final BootstrapContext bootstrapContext,
 			final MetadataImplementor metadata,
 			SessionFactoryOptions options) {
 		LOG.debug( "Building session factory" );
@@ -202,7 +201,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 		this.serviceRegistry = options
 				.getServiceRegistry()
 				.getService( SessionFactoryServiceRegistryFactory.class )
-				.buildServiceRegistry( this, bootstrapContext, options );
+				.buildServiceRegistry( this, options );
 
 		prepareEventListeners( metadata );
 
@@ -219,7 +218,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 		this.name = sfName;
 		this.uuid = options.getUuid();
 
-		final JdbcServices jdbcServices = serviceRegistry.getService( JdbcServices.class );
+		jdbcServices = serviceRegistry.getService( JdbcServices.class );
 
 		this.properties = new HashMap<>();
 		this.properties.putAll( serviceRegistry.getService( ConfigurationService.class ).getSettings() );
@@ -291,7 +290,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 
 			LOG.debug( "Instantiated session factory" );
 
-			this.metamodel = metadata.getTypeConfiguration().scope( this , bootstrapContext);
+			this.metamodel = metadata.getTypeConfiguration().scope( this );
 			( (MetamodelImpl) this.metamodel ).initialize(
 					metadata,
 					determineJpaMetaModelPopulationSetting( properties )
@@ -544,9 +543,6 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 
 	@Override
 	public JdbcServices getJdbcServices() {
-		if ( jdbcServices == null ) {
-			jdbcServices = getServiceRegistry().getService( JdbcServices.class );
-		}
 		return jdbcServices;
 	}
 
@@ -593,8 +589,8 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 	}
 
 	@Override
-	public <T> List<EntityGraph<? super T>> findEntityGraphsByType(Class<T> entityClass) {
-		return getMetamodel().findEntityGraphsByType( entityClass );
+	public <T> List<RootGraphImplementor<? super T>> findEntityGraphsByJavaType(Class<T> entityClass) {
+		return getMetamodel().findEntityGraphsByJavaType( entityClass );
 	}
 
 
@@ -686,7 +682,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 	}
 
 	@Override
-	public EntityGraph findEntityGraphByName(String name) {
+	public RootGraphImplementor findEntityGraphByName(String name) {
 		return getMetamodel().findEntityGraphByName( name );
 	}
 
@@ -780,19 +776,21 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 	public void close() throws HibernateException {
 		//This is an idempotent operation so we can do it even before the checks (it won't hurt):
 		Environment.getBytecodeProvider().resetCaches();
-		if ( isClosed ) {
-			if ( getSessionFactoryOptions().getJpaCompliance().isJpaClosedComplianceEnabled() ) {
-				throw new IllegalStateException( "EntityManagerFactory is already closed" );
+		synchronized (this) {
+			if ( isClosed ) {
+				if ( getSessionFactoryOptions().getJpaCompliance().isJpaClosedComplianceEnabled() ) {
+					throw new IllegalStateException( "EntityManagerFactory is already closed" );
+				}
+
+				LOG.trace( "Already closed" );
+				return;
 			}
 
-			LOG.trace( "Already closed" );
-			return;
+			isClosed = true;
 		}
 
 		LOG.closing();
 		observer.sessionFactoryClosing( this );
-
-		isClosed = true;
 
 		settings.getMultiTableBulkIdStrategy().release( serviceRegistry.getService( JdbcServices.class ), buildLocalConnectionAccess() );
 
@@ -962,7 +960,7 @@ public final class SessionFactoryImpl implements SessionFactoryImplementor {
 
 	@Override
 	public <T> void addNamedEntityGraph(String graphName, EntityGraph<T> entityGraph) {
-		getMetamodel().addNamedEntityGraph( graphName, entityGraph );
+		getMetamodel().addNamedEntityGraph( graphName, (RootGraphImplementor<T>) entityGraph );
 	}
 
 	public boolean isClosed() {

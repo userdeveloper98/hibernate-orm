@@ -1,7 +1,7 @@
 ﻿[[entity]]
 === Entity types
 :sourcedir-locking: ../../../../../test/java/org/hibernate/userguide/locking
-:sourcedir-mapping: ../../../../../test/java/org/hibernate/userguide/mapping/
+:sourcedir-mapping: ../../../../../test/java/org/hibernate/userguide/mapping
 :sourcedir-proxy: ../../../../../test/java/org/hibernate/userguide/proxy
 :sourcedir-persister: ../../../../../test/java/org/hibernate/userguide/persister
 :extrasdir: extras
@@ -10,9 +10,9 @@
 [NOTE]
 ====
 The entity type describes the mapping between the actual persistable domain model object and a database table row.
-To avoid any confusion with the annotation that marks a given entity type, the annotation will be further referred as `@Entity`.
+To avoid any confusion with the annotation that marks a given entity type, the annotation will be further referred to as `@Entity`.
 
-Throughout this chapter and thereafter, entity types will be simply referred as _entity_.
+Throughout this chapter and thereafter, entity types will be simply referred to as _entity_.
 ====
 
 [[entity-pojo]]
@@ -71,17 +71,17 @@ That said, the constructor should be defined with at least package visibility if
 [[entity-pojo-accessors]]
 ==== Declare getters and setters for persistent attributes
 
-The JPA specification requires this, otherwise the model would prevent accessing the entity persistent state fields directly from outside the entity itself.
+The JPA specification requires this, otherwise, the model would prevent accessing the entity persistent state fields directly from outside the entity itself.
 
 Although Hibernate does not require it, it is recommended to follow the JavaBean conventions and define getters and setters for entity persistent attributes.
 Nevertheless, you can still tell Hibernate to directly access the entity fields.
 
 Attributes (whether fields or getters/setters) need not be declared public.
-Hibernate can deal with attributes declared with public, protected, package or private visibility.
+Hibernate can deal with attributes declared with the public, protected, package or private visibility.
 Again, if wanting to use runtime proxy generation for lazy loading, the getter/setter should grant access to at least package visibility.
 
 [[entity-pojo-identifier]]
-==== Provide identifier attribute(s)
+==== Providing identifier attribute(s)
 
 [IMPORTANT]
 ====
@@ -113,12 +113,34 @@ Hibernate offers multiple identifier generation strategies, see the <<chapters/d
 [[entity-pojo-mapping]]
 ==== Mapping the entity
 
-The main piece in mapping the entity is the `javax.persistence.Entity` annotation.
-The `@Entity` annotation defines just one attribute `name` which is used to give a specific entity name for use in JPQL queries.
-By default, the entity name represents the unqualified name of the entity class itself.
+The main piece in mapping the entity is the https://javaee.github.io/javaee-spec/javadocs/javax/persistence/Entity.html[`javax.persistence.Entity`] annotation.
+
+The `@Entity` annotation defines just the https://javaee.github.io/javaee-spec/javadocs/javax/persistence/Entity.html#name--[`name`] attribute which is used to give a specific entity name for use in JPQL queries.
+
+By default, if the name attribute the `@Entity` annotation is missing, the unqualified name of the entity class itself will be used as the entity name
+
+[IMPORTANT]
+====
+Because the entity name is given by the unqualified name of the class, Hibernate does not allow registering multiple entities with the same name even if the entity classes reside in different packages.
+
+Without imposing this restriction, Hibernate would not know which entity class is referenced in a JPQL query if the unqualified entity name is associated with more then one entity classes.
+====
+
+In the following example, the entity name (e.g. `Book`) is given by the unqualified name of the entity class name.
+
+[[entity-pojo-mapping-implicit-name-example]]
+.`@Entity` mapping with an implicit name
+====
+[source,java]
+----
+include::{sourcedir-mapping}/identifier/Book.java[tag=entity-pojo-mapping-implicit-name-example, indent=0]
+----
+====
+
+However, the entity name can also be set explicitly as illustrated by the following example.
 
 [[entity-pojo-mapping-example]]
-.Simple `@Entity` mapping
+.`@Entity` mapping with an explicit name
 ====
 [source,java]
 ----
@@ -138,6 +160,74 @@ To explicitly give the name of the table or to specify other information about t
 ----
 include::{sourcedir-mapping}/identifier/SimpleEntityTableTest.java[tag=entity-pojo-table-mapping-example, indent=0]
 ----
+====
+
+[[mapping-entity-table-catalog]]
+===== Mapping the catalog of the associated table
+
+Without specifying the catalog of the associated database table a given entity is mapped to, Hibernate will use the default catalog associated with the current database connection.
+
+However, if your database hosts multiple catalogs, you can specify the catalog where a given table is located using the `catalog` attribute of the JPA https://javaee.github.io/javaee-spec/javadocs/javax/persistence/Table.html[`@Table`] annotation.
+
+Let's assume we are using MySQL and want to map a `Book` entity to the `book` table located in the `public` catalog
+which looks as follows.
+
+[[mapping-post-table-catalog-mysql-example]]
+.The `post` table located in the `public` catalog
+====
+[source,sql]
+----
+include::{extrasdir}/entity/mapping-post-table-catalog-mysql-example.sql[]
+----
+====
+
+Now, to map the `Book` entity to the `book` table in the `public` catalog we can use the `catalog` attribute of the `@Table` JPA annotation.
+
+[[mapping-entity-table-catalog-mysql-example]]
+.Specifying the database catalog using the `@Table` annotation
+====
+[source,java]
+----
+include::{sourcedir-mapping}/identifier/EntityTableCatalogTest.java[tag=mapping-entity-table-catalog-mysql-example, indent=0]
+----
+====
+
+[[mapping-entity-table-schema]]
+===== Mapping the schema of the associated table
+
+Without specifying the schema of the associated database table a given entity is mapped to, Hibernate will use the default schema associated with the current database connection.
+
+However, if your database supports schemas, you can specify the schema where a given table is located using the `schema` attribute of the JPA https://javaee.github.io/javaee-spec/javadocs/javax/persistence/Table.html[`@Table`] annotation.
+
+Let's assume we are using PostgreSQL and want to map a `Book` entity to the `book` table located in the `library` schema
+which looks as follows.
+
+[[mapping-post-table-schema-postgresql-example]]
+.The `post` table located in the `library` schema
+====
+[source,sql]
+----
+include::{extrasdir}/entity/mapping-post-table-schema-postgresql-example.sql[]
+----
+====
+
+Now, to map the `Book` entity to the `book` table in the `library` schema we can use the `schema` attribute of the `@Table` JPA annotation.
+
+[[mapping-entity-table-catalog-mysql-example]]
+.Specifying the database schema using the `@Table` annotation
+====
+[source,java]
+----
+include::{sourcedir-mapping}/identifier/EntityTableSchemaTest.java[tag=mapping-entity-table-schema-postgresql-example, indent=0]
+----
+====
+
+[IMPORTANT]
+====
+The `schema` attribute of the `@Table` annotation works only if the underlying database supports schemas (e.g. PostgreSQL).
+
+Therefore, if you're using MySQL or MariaDB, which do not support schemas natively (schemas being just an alias for catalog), you need to use the
+`catalog` attribute, and not the `schema` one.
 ====
 
 [[mapping-model-pojo-equalshashcode]]
@@ -210,11 +300,11 @@ include::{sourcedir-mapping}/identifier/SimpleEntityTest.java[tag=entity-pojo-mu
 ----
 ====
 
-Specifically the outcome in this last example will depend on whether the `Book` class
+Specifically, the outcome in this last example will depend on whether the `Book` class
 implemented equals/hashCode, and, if so, how.
 
 If the `Book` class did not override the default equals/hashCode,
-then the two `Book` object reference are not going to be equal since their references are different.
+then the two `Book` object references are not going to be equal since their references are different.
 
 Consider yet another case:
 
@@ -253,7 +343,7 @@ include::{sourcedir-mapping}/identifier/NaiveEqualsHashCodeEntityTest.java[tag=e
 ----
 ====
 
-The issue here is a conflict between the use of generated identifier, the contract of `Set` and the equals/hashCode implementations.
+The issue here is a conflict between the use of the generated identifier, the contract of `Set`, and the equals/hashCode implementations.
 `Set` says that the equals/hashCode value for an object should not change while the object is part of the `Set`.
 But that is exactly what happened here because the equals/hasCode are based on the (generated) id, which was not set until the JPA transaction is committed.
 
@@ -328,7 +418,7 @@ To find the `Account` balance, we need to query the `AccountSummary` which share
 
 However, the `AccountSummary` is not mapped to a physical table, but to an SQL query.
 
-So, if we have the following `AccountTransaction` record, the `AccountSummary` balance will mach the proper amount of money in this `Account`.
+So, if we have the following `AccountTransaction` record, the `AccountSummary` balance will match the proper amount of money in this `Account`.
 
 [[mapping-Subselect-entity-find-example]]
 .Finding a `@Subselect` entity
@@ -356,7 +446,7 @@ The goal of the `@Synchronize` annotation in the `AccountSummary` entity mapping
 underlying `@Subselect` SQL query. This is because, unlike JPQL and HQL queries, Hibernate cannot parse the underlying native SQL query.
 
 With the `@Synchronize` annotation in place,
-when executing a HQL or JPQL which selects from the `AccountSummary` entity,
+when executing an HQL or JPQL which selects from the `AccountSummary` entity,
 Hibernate will trigger a Persistence Context flush if there are pending `Account`, `Client` or `AccountTransaction` entity state transitions.
 ====
 

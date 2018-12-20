@@ -56,8 +56,6 @@ import org.hibernate.boot.spi.InFlightMetadataCollector;
 import org.hibernate.boot.spi.MetadataBuildingContext;
 import org.hibernate.boot.spi.MetadataBuildingOptions;
 import org.hibernate.boot.spi.NaturalIdUniqueKeyBinder;
-import org.hibernate.cache.cfg.internal.DomainDataRegionConfigImpl.Builder;
-import org.hibernate.cache.spi.access.AccessType;
 import org.hibernate.cfg.AnnotatedClassType;
 import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.cfg.CopyIdentifierComponentSecondPass;
@@ -146,8 +144,6 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector 
 	private final Map<String, NamedEntityGraphDefinition> namedEntityGraphMap = new HashMap<>();
 	private final Map<String, FetchProfile> fetchProfileMap = new HashMap<>();
 	private final Map<String, IdentifierGeneratorDefinition> idGeneratorDefinitionMap = new HashMap<>();
-
-	private final Map<String, Builder> regionConfigBuilders = new ConcurrentHashMap<>();
 
 	private Map<String, SQLFunction> sqlFunctionMap;
 
@@ -293,31 +289,31 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector 
 	@Override
 	public void addEntityBinding(PersistentClass persistentClass) throws DuplicateMappingException {
 		final String entityName = persistentClass.getEntityName();
+		final String jpaEntityName = persistentClass.getJpaEntityName();
 		if ( entityBindingMap.containsKey( entityName ) ) {
 			throw new DuplicateMappingException( DuplicateMappingException.Type.ENTITY, entityName );
 		}
-		entityBindingMap.put( entityName, persistentClass );
 
-		final AccessType accessType = AccessType.fromExternalName( persistentClass.getCacheConcurrencyStrategy() );
-		if ( accessType != null ) {
-			if ( persistentClass.isCached() ) {
-				locateCacheRegionConfigBuilder( persistentClass.getRootClass().getCacheRegionName() ).addEntityConfig(
-						persistentClass,
-						accessType
-				);
-			}
+		PersistentClass matchingPersistentClass = entityBindingMap.values()
+				.stream()
+				.filter( existingPersistentClass -> existingPersistentClass.getJpaEntityName().equals( jpaEntityName ) )
+				.findFirst()
+				.orElse( null );
 
-			if ( persistentClass.hasNaturalId() && persistentClass instanceof RootClass && persistentClass.getNaturalIdCacheRegionName() != null ) {
-				locateCacheRegionConfigBuilder( persistentClass.getNaturalIdCacheRegionName() ).addNaturalIdConfig(
-						(RootClass) persistentClass,
-						accessType
-				);
-			}
+		if ( matchingPersistentClass != null ) {
+			throw new DuplicateMappingException(
+					String.format(
+							"The [%s] and [%s] entities share the same JPA entity name: [%s] which is not allowed!",
+							matchingPersistentClass.getClassName(),
+							persistentClass.getClassName(),
+							jpaEntityName
+					),
+					DuplicateMappingException.Type.ENTITY,
+					jpaEntityName
+			);
 		}
-	}
 
-	private Builder locateCacheRegionConfigBuilder(String regionName) {
-		return regionConfigBuilders.computeIfAbsent( regionName, Builder::new );
+		entityBindingMap.put( entityName, persistentClass );
 	}
 
 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -340,14 +336,6 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector 
 			throw new DuplicateMappingException( DuplicateMappingException.Type.COLLECTION, collectionRole );
 		}
 		collectionBindingMap.put( collectionRole, collection );
-
-		final AccessType accessType = AccessType.fromExternalName( collection.getCacheConcurrencyStrategy() );
-		if ( accessType != null ) {
-			locateCacheRegionConfigBuilder( collection.getCacheRegionName() ).addCollectionConfig(
-					collection,
-					accessType
-			);
-		}
 	}
 
 
@@ -2260,7 +2248,6 @@ public class InFlightMetadataCollectorImpl implements InFlightMetadataCollector 
 					sqlResultSetMappingMap,
 					namedEntityGraphMap,
 					sqlFunctionMap,
-					regionConfigBuilders.values(),
 					getDatabase(),
 					bootstrapContext
 			);

@@ -16,7 +16,6 @@ import org.hibernate.jpa.test.BaseEntityManagerFunctionalTestCase;
 import org.hibernate.metamodel.spi.MetamodelImplementor;
 import org.hibernate.query.Query;
 import org.hibernate.type.Type;
-import org.hibernate.type.descriptor.converter.AttributeConverterTypeAdapter;
 
 import org.hibernate.testing.TestForIssue;
 import org.junit.Test;
@@ -40,7 +39,7 @@ public class ConverterTest extends BaseEntityManagerFunctionalTestCase {
 		doInJPA( this::entityManagerFactory, entityManager -> {
 			Photo photo = new Photo();
 			photo.setId( 1 );
-			photo.setName( "Dorobanțul" );
+			photo.setName( "Dorobantul" );
 			photo.setCaption( new Caption( "Nicolae Grigorescu" ) );
 
 			entityManager.persist( photo );
@@ -59,7 +58,7 @@ public class ConverterTest extends BaseEntityManagerFunctionalTestCase {
 			.getSingleResult();
 			//end::basic-attribute-converter-query-parameter-converter-dbdata-example[]
 
-			assertEquals( "Dorobanțul", photo.getName() );
+			assertEquals( "Dorobantul", photo.getName() );
 		} );
 	}
 
@@ -85,7 +84,7 @@ public class ConverterTest extends BaseEntityManagerFunctionalTestCase {
 			.getSingleResult();
 			//end::basic-attribute-converter-query-parameter-converter-object-example[]
 
-			assertEquals( "Dorobanțul", photo.getName() );
+			assertEquals( "Dorobantul", photo.getName() );
 		} );
 	}
 

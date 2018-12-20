@@ -902,6 +902,18 @@ public interface AvailableSettings extends org.hibernate.jpa.AvailableSettings {
 	String WRAP_RESULT_SETS = "hibernate.jdbc.wrap_result_sets";
 
 	/**
+	 * Indicates if exception handling for a SessionFactory built via Hibernate's native bootstrapping
+	 * should behave the same as native exception handling in Hibernate ORM 5.1, When set to {@code true},
+	 * {@link HibernateException} will not be wrapped or converted according to the JPA specification.
+	 * <p/>
+	 * This setting will be ignored for a SessionFactory built via JPA bootstrapping.
+	 * <p/>
+	 * Values are {@code true}  or {@code false}.
+	 * Default value is {@code false}
+	 */
+	String NATIVE_EXCEPTION_HANDLING_51_COMPLIANCE = "hibernate.native_exception_handling_51_compliance";
+
+	/**
 	 * Enable ordering of update statements by primary key value
 	 */
 	String ORDER_UPDATES = "hibernate.order_updates";
@@ -1055,7 +1067,10 @@ public interface AvailableSettings extends org.hibernate.jpa.AvailableSettings {
 	String CACHE_PROVIDER_CONFIG = "hibernate.cache.provider_configuration_file_resource_path";
 
 	/**
-	 * Enable the second-level cache (enabled by default)
+	 * Enable the second-level cache.
+	 * <p>
+	 * By default, if the currently configured {@link org.hibernate.cache.spi.RegionFactory} is not the {@link org.hibernate.cache.internal.NoCachingRegionFactory},
+	 * then the second-level cache is going to be enabled. Otherwise, the second-level cache is disabled.
 	 */
 	String USE_SECOND_LEVEL_CACHE = "hibernate.cache.use_second_level_cache";
 
@@ -1467,6 +1482,22 @@ public interface AvailableSettings extends org.hibernate.jpa.AvailableSettings {
 	 * either a class name or instance.
 	 */
 	String CUSTOM_ENTITY_DIRTINESS_STRATEGY = "hibernate.entity_dirtiness_strategy";
+
+	/**
+	 * Controls whether an entity's "where" clause, mapped using <code>@Where(clause="....")</code>
+	 * or <code>&lt;entity ... where="..."&gt;</code>, is taken into account when loading one-to-many
+	 * or many-to-many collections of that type of entity.
+	 * <p/>
+	 * This setting has no affect on collections of embeddable values containing an association to
+	 * that type of entity.
+	 * <p/>
+	 * When `true` (the default), the entity's "where" clause will be taken into account when loading
+	 * one-to-many or many-to-many collections of that type of entity.
+	 * <p/>
+	 * `false` indicates that the entity's "where" clause will be ignored when loading one-to-many or
+	 * many-to-many collections of that type of entity.
+	 */
+	String USE_ENTITY_WHERE_CLAUSE_FOR_COLLECTIONS = "hibernate.use_entity_where_clause_for_collections";
 
 	/**
 	 * Strategy for multi-tenancy.
@@ -1939,4 +1970,44 @@ public interface AvailableSettings extends org.hibernate.jpa.AvailableSettings {
 	 */
 	String IN_CLAUSE_PARAMETER_PADDING = "hibernate.query.in_clause_parameter_padding";
 
+	/**
+	 * This setting controls the number of {@link org.hibernate.stat.QueryStatistics} entries
+	 * that will be stored by the Hibernate {@link org.hibernate.stat.Statistics} object.
+	 * </p>
+	 * The default value is given by the {@link org.hibernate.stat.Statistics#DEFAULT_QUERY_STATISTICS_MAX_SIZE} constant value.
+	 *
+	 * @since 5.4
+	 */
+	String QUERY_STATISTICS_MAX_SIZE = "hibernate.statistics.query_max_size";
+
+	/**
+	 * This setting defines the {@link org.hibernate.id.SequenceMismatchStrategy} used when
+	 * Hibernate detects a mismatch between a sequence configuration in an entity mapping
+	 * and its database sequence object counterpart.
+	 * </p>
+	 * Possible values are {@link org.hibernate.id.SequenceMismatchStrategy#EXCEPTION},
+	 * {@link org.hibernate.id.SequenceMismatchStrategy#LOG}, and
+	 * {@link org.hibernate.id.SequenceMismatchStrategy#FIX}.
+	 * </p>
+	 * The default value is given by the {@link org.hibernate.id.SequenceMismatchStrategy#EXCEPTION},
+	 * meaning that an Exception is thrown when detecting such a conflict.
+	 *
+	 * @since 5.4
+	 */
+	String SEQUENCE_INCREMENT_SIZE_MISMATCH_STRATEGY = "hibernate.id.sequence.increment_size_mismatch_strategy";
+
+	/**
+	 * This setting controls whether the default behavior for delayed identity inserts is disabled.
+	 * </p>
+	 * Hibernate defines a set of rules that are used to determine if an insert statement that has
+	 * an identity-based column can be delayed until flush/commit or if the statement must be
+	 * executed early because access to the identity column is needed.
+	 * </p>
+	 * In the event that those defined rules are insufficient for a given mapping scenario, this
+	 * setting can be set to {@code true} to permanently disable delayed identity inserts for all
+	 * transactions as a short-term workaround.
+	 * </p>
+	 * The default value is {@code false}.
+	 */
+	String DISABLE_DELAYED_IDENTIFIER_POST_INSERTS = "hibernate.id.disable_delayed_identifier_post_inserts";
 }
